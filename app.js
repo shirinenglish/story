@@ -16,11 +16,25 @@
       .replace(/(^|\W)_(?!\s)(.+?)_(?=\W|$)/g, "$1<em>$2</em>");
   }
 
+  const IMG = /^!\[([^\]]*)\]\(([^)\s]+)\)$/;
+  function safeSrc(src) {
+    return (/^images\/[A-Za-z0-9._-]+$/.test(src) || /^https:\/\/[^\s"'<>]+$/.test(src)) ? src : null;
+  }
+  function firstImage(text) {
+    for (const l of String(text || "").split("\n")) {
+      const m = l.trim().match(IMG);
+      if (m && safeSrc(m[2])) return m[2];
+    }
+    return "";
+  }
+
   // Simple writing format:
   //   blank line = new paragraph      ## Heading      ### Small heading
   //   > quote      ***  or  ---  = scene break      - list item
   //   **bold**     *italic*
-  function render(text) {
+  //   ![caption](images/photo.jpg) on its own line = photo
+  function render(text, opts) {
+    const resolve = (opts && opts.resolve) || (s => s);
     const blocks = String(text || "").replace(/\r\n?/g, "\n").split(/\n\s*\n/);
     const out = [];
     for (let raw of blocks) {
@@ -31,6 +45,15 @@
       if (b.startsWith("## ")) { out.push("<h2>" + inline(esc(b.slice(3))) + "</h2>"); continue; }
       if (b.startsWith("# ")) { out.push("<h2>" + inline(esc(b.slice(2))) + "</h2>"); continue; }
       const lines = b.split("\n");
+      if (lines.every(l => IMG.test(l.trim()))) {
+        out.push(lines.map(l => {
+          const m = l.trim().match(IMG), src = safeSrc(m[2]);
+          if (!src) return "";
+          return '<figure><img src="' + esc(resolve(src)) + '" alt="' + esc(m[1]) + '" loading="lazy">' +
+            (m[1] ? "<figcaption>" + esc(m[1]) + "</figcaption>" : "") + "</figure>";
+        }).join(""));
+        continue;
+      }
       if (lines.every(l => /^\s*>/.test(l))) {
         const q = lines.map(l => inline(esc(l.replace(/^\s*>\s?/, "")))).join("<br>");
         out.push("<blockquote><p>" + q + "</p></blockquote>"); continue;
@@ -46,6 +69,7 @@
 
   function plain(text) {
     return String(text || "")
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
       .replace(/^#+\s+/gm, "").replace(/^>\s?/gm, "").replace(/\*\*|\*|_/g, "")
       .replace(/^(-{3,}|⁂)$/gm, "").replace(/\s+/g, " ").trim();
   }
@@ -64,7 +88,7 @@
 
   // Reading side: load the list and single posts from the site itself.
   async function loadIndex() {
-    if (window.DEMO_POSTS) return window.DEMO_POSTS.map(p => ({ ...p, excerpt: excerpt(p.body), words: words(p.body) }));
+    if (window.DEMO_POSTS) return window.DEMO_POSTS.map(p => ({ ...p, excerpt: excerpt(p.body), words: words(p.body), cover: firstImage(p.body) }));
     const r = await fetch("posts/index.json?v=" + Date.now(), { cache: "no-store" });
     if (r.status === 404) return [];
     if (!r.ok) throw new Error("Could not load stories (" + r.status + ")");
@@ -81,5 +105,5 @@
   function link(slug) { return "post.html" + (window.DEMO_POSTS ? "#" : "?p=") + encodeURIComponent(slug); }
   function currentSlug() { return new URLSearchParams(location.search).get("p") || decodeURIComponent(location.hash.slice(1)); }
 
-  window.App = { link, currentSlug, S, esc, render, plain, words, excerpt, minutes, niceDate, KIND, loadIndex, loadPost };
+  window.App = { firstImage, safeSrc, link, currentSlug, S, esc, render, plain, words, excerpt, minutes, niceDate, KIND, loadIndex, loadPost };
 })();
