@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+<script src="app.js"></script>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="wrap">
+  <div class="topbar">
+    <a href="index.html" id="home">← All writing</a>
+    <button id="share" type="button">Share</button>
+  </div>
+
+  <article id="art">
+    <p class="empty">Opening…</p>
+  </article>
+</div>
+
+<script>
+(async function () {
+  const { S, esc, render, niceDate, minutes, words, KIND, loadPost } = App;
+  document.getElementById("home").textContent = "← " + S.title;
+  const art = document.getElementById("art");
+  const slug = App.currentSlug() || "";
+
+  const p = await loadPost(slug).catch(() => null);
+  if (!p) {
+    document.title = S.title;
+    art.innerHTML = '<p class="empty">This piece could not be found. <a href="index.html">Back to all writing</a></p>';
+    return;
+  }
+  document.title = p.title + " — " + S.title;
+  const w = words(p.body);
+  art.innerHTML =
+    '<header class="post-head">' +
+      '<div class="kind">' + esc(KIND[p.type] || "Story") + "</div>" +
+      "<h1>" + esc(p.title) + "</h1>" +
+      (p.subtitle ? '<p class="sub">' + esc(p.subtitle) + "</p>" : "") +
+      '<div class="meta">' + esc(S.author) + " · " + esc(niceDate(p.date)) + " · " + minutes(w) + " min read</div>" +
+    "</header>" +
+    '<div class="body' + (p.type === "story" ? " drop" : "") + '">' + render(p.body) + "</div>" +
+    '<div class="endmark">❦</div>' +
+    '<div class="post-foot"><a href="index.html">Read more from ' + esc(S.title) + "</a></div>";
+
+  const bar = document.getElementById("progress");
+  function prog() {
+    const h = document.documentElement.scrollHeight - innerHeight;
+    bar.style.width = (h > 0 ? Math.min(100, scrollY / h * 100) : 100) + "%";
+  }
+  addEventListener("scroll", prog, { passive: true }); prog();
+
+  document.getElementById("share").addEventListener("click", async () => {
+    const data = { title: p.title, url: location.href };
+    try {
+      if (navigator.share) await navigator.share(data);
+      else { await navigator.clipboard.writeText(location.href); alertLite("Link copied"); }
+    } catch (e) {}
+  });
+  function alertLite(t) {
+    const b = document.getElementById("share"); const old = b.textContent;
+    b.textContent = t; setTimeout(() => b.textContent = old, 1600);
+  }
+})();
+</script>
+</body>
+</html>
