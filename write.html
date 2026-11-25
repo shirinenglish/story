@@ -68,19 +68,17 @@
       <option value="note">Note</option>
     </select>
 
-    <label class="f" for="eBody">Your text</label>
+    <label class="f">Your text</label>
     <div class="toolbar" id="tools">
-      <button data-a="b"><b>B</b></button>
-      <button data-a="i"><i>I</i></button>
+      <button data-a="b" title="Bold"><b>B</b></button>
+      <button data-a="i" title="Italic"><i>I</i></button>
       <button data-a="h">Heading</button>
       <button data-a="q">“ Quote</button>
       <button data-a="hr">☕ Scene break</button>
       <button data-a="photo">📷 Add photo</button>
-      <button data-a="prev" id="prevBtn">Preview</button>
     </div>
     <input type="file" id="photoIn" accept="image/*" class="hidden">
-    <textarea class="t write" id="eBody" placeholder="Start writing… Leave an empty line between paragraphs."></textarea>
-    <div class="preview hidden" id="ePrev"><div class="body"></div></div>
+    <div class="t write body editor" id="eBody" contenteditable="true" spellcheck="true" data-ph="Start writing your story here…"></div>
     <p class="hint" id="count"></p>
 
     <div class="status" id="editMsg"></div>
@@ -253,28 +251,146 @@
     }
   };
 
-  // ---------- editor ----------
-  let cur = null, timer = null;
+  // ---------- editor (works like Word: what you see is what readers see) ----------
+  const ed = $("eBody");
+  let cur = null, timer = null, lastRange = null;
+  const localImgs = {};   // photos added now, shown before the site updates
+  try { document.execCommand("defaultParagraphSeparator", false, "p"); } catch (e) {}
+
+  // text format -> editor
+  function figureEl(path, caption) {
+    const f = document.createElement("figure");
+    f.contentEditable = "false"; f.className = "ed-fig"; f.dataset.src = path;
+    const img = document.createElement("img"); img.src = localImgs[path] || path; img.alt = "";
+    const cap = document.createElement("input"); cap.className = "ed-cap"; cap.placeholder = "Add a caption (optional)"; cap.value = caption || "";
+    const rm = document.createElement("button"); rm.type = "button"; rm.className = "ed-rm"; rm.textContent = "✕ Remove photo";
+    rm.onclick = () => { f.remove(); ensureEmpty(); autosave(); };
+    cap.addEventListener("input", autosave);
+    f.append(img, cap, rm);
+    return f;
+  }
+  function loadInto(md) {
+    const tmp = document.createElement("div");
+    tmp.innerHTML = render(md);
+    ed.innerHTML = "";
+    for (const n of Array.from(tmp.childNodes)) {
+      if (n.nodeType !== 1) continue;
+      if (n.tagName === "FIGURE") {
+        // render() may put several figures in a row; split them
+        continue;
+      }
+      if (n.tagName === "BLOCKQUOTE") {
+        const q = document.createElement("blockquote");
+        q.innerHTML = Array.from(n.querySelectorAll("p")).map(p => p.innerHTML).join("<br>") || n.innerHTML;
+        ed.appendChild(q); continue;
+      }
+      ed.appendChild(n);
+    }
+    // put photos back in the right places
+    const out = [];
+    for (const block of String(md || "").replace(/\r\n?/g, "\n").split(/\n\s*\n/)) {
+      const lines = block.trim().split("\n");
+      if (block.trim() && lines.every(l => /^!\[[^\]]*\]\([^)\s]+\)$/.test(l.trim()))) out.push(lines);
+      else if (block.trim()) out.push(null);
+    }
+    // rebuild in order: walk markdown blocks, pairing non-photo blocks with rendered nodes
+    const rendered = Array.from(ed.childNodes); ed.innerHTML = ""; let k = 0;
+    for (const item of out) {
+      if (item) {
+        for (const l of item) {
+          const m = l.trim().match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/);
+          if (m && App.safeSrc(m[2])) ed.appendChild(figureEl(m[2], m[1]));
+        }
+      } else if (rendered[k]) ed.appendChild(rendered[k++]);
+    }
+    while (k < rendered.length) ed.appendChild(rendered[k++]);
+    ensureEmpty();
+  }
+  function ensureEmpty() {
+    const last = ed.lastElementChild;
+    if (!last || last.tagName === "FIGURE" || last.tagName === "HR") {
+      const p = document.createElement("p"); p.innerHTML = "<br>"; ed.appendChild(p);
+    }
+    ed.classList.toggle("is-empty", !ed.textContent.trim() && !ed.querySelector("figure"));
+  }
+
+  // editor -> text format (what gets saved and published)
+  function wrapMark(s, m) {
+    const t = s.trim(); if (!t) return s;
+    const lead = s.match(/^\s*/)[0], trail = s.match(/\s*$/)[0];
+    return lead + m + t + m + trail;
+  }
+  function inl(node) {
+    let s = "";
+    node.childNodes.forEach(n => {
+      if (n.nodeType === 3) { s += n.nodeValue.replace(/ /g, " "); return; }
+      if (n.nodeType !== 1) return;
+      const t = n.tagName, st = n.style || {};
+      if (t === "BR") s += "\n";
+      else if (t === "B" || t === "STRONG" || /bold|[6-9]00/.test(st.fontWeight || "")) s += wrapMark(inl(n), "**");
+      else if (t === "I" || t === "EM" || st.fontStyle === "italic") s += wrapMark(inl(n), "*");
+      else if (t === "FIGURE" || t === "IMG" || t === "INPUT" || t === "BUTTON") {}
+      else s += inl(n);
+    });
+    return s;
+  }
+  function clean(s) { return s.split("\n").map(l => l.replace(/[ \t]+/g, " ").trim()).join("\n").replace(/^\n+|\n+$/g, ""); }
+  function toMd() {
+    const out = [];
+    function photo(f) {
+      const src = f.dataset.src, cap = (f.querySelector(".ed-cap") || {}).value || "";
+      if (src) out.push("![" + cap.replace(/[\[\]\n]/g, " ").trim() + "](" + src + ")");
+    }
+    function block(n) {
+      if (n.nodeType === 3) { const t = clean(n.nodeValue); if (t) out.push(t); return; }
+      if (n.nodeType !== 1) return;
+      const t = n.tagName;
+      if (t === "FIGURE") return photo(n);
+      if (t === "HR") return out.push("***");
+      if (/^H[1-6]$/.test(t)) { const x = clean(inl(n)).replace(/\n/g, " "); if (x) out.push("## " + x); return; }
+      if (t === "BLOCKQUOTE") { const x = clean(inl(n)); if (x) out.push(x.split("\n").map(l => "> " + l).join("\n")); return; }
+      if (t === "UL" || t === "OL") { const items = Array.from(n.querySelectorAll("li")).map(li => clean(inl(li))).filter(Boolean); if (items.length) out.push(items.map(i => "- " + i).join("\n")); return; }
+      if (n.querySelector("figure, p, div, h2, h3, blockquote, hr")) { n.childNodes.forEach(block); return; }
+      const x = clean(inl(n)); if (x) out.push(x);
+    }
+    ed.childNodes.forEach(block);
+    return out.join("\n\n");
+  }
+
   function openEditor(d) {
     cur = d; show("vEdit"); clearMsg($("editMsg"));
     $("eTitle").value = d.title; $("eSub").value = d.subtitle || ""; $("eType").value = d.type || "story";
-    $("eBody").value = d.body;
+    loadInto(d.body);
     $("pubBtn").textContent = d.slug ? "Update published piece" : "Publish";
     $("delDraft").textContent = d.slug ? "Discard changes" : "Delete draft";
-    setPreview(false); count(); $("saved").textContent = "";
+    count(); $("saved").textContent = "";
   }
   function collect() {
     cur.title = $("eTitle").value; cur.subtitle = $("eSub").value; cur.type = $("eType").value;
-    cur.body = $("eBody").value; cur.updated = Date.now();
+    cur.body = toMd(); cur.updated = Date.now();
   }
-  function count() { const w = words($("eBody").value); $("count").textContent = w + " words · about " + minutes(w) + " min read"; }
+  function count() { const w = words(toMd()); $("count").textContent = w + " words · about " + minutes(w) + " min read"; }
   function autosave() {
     clearTimeout(timer); $("saved").textContent = "…";
-    timer = setTimeout(() => { collect(); saveDraft(cur); $("saved").textContent = "Saved on this device ✓"; }, 600);
-    count();
+    timer = setTimeout(() => { collect(); saveDraft(cur); $("saved").textContent = "Saved on this device ✓"; count(); }, 600);
+    ed.classList.toggle("is-empty", !ed.textContent.trim() && !ed.querySelector("figure"));
   }
-  ["eTitle", "eSub", "eBody"].forEach(id => $(id).addEventListener("input", autosave));
+  ["eTitle", "eSub"].forEach(id => $(id).addEventListener("input", autosave));
   $("eType").addEventListener("change", autosave);
+  ed.addEventListener("input", autosave);
+  ed.addEventListener("paste", e => {
+    // paste as clean text so strange formatting from other sites doesn't come along
+    const t = (e.clipboardData || window.clipboardData).getData("text/plain");
+    if (t == null) return;
+    e.preventDefault();
+    const parts = t.replace(/\r\n?/g, "\n").split(/\n\s*\n/);
+    const html = parts.map((p, i) => (i ? "<p>" : "") + esc(p).replace(/\n/g, "<br>") + (i < parts.length - 1 ? "</p>" : "")).join("");
+    document.execCommand(parts.length > 1 ? "insertHTML" : "insertText", false, parts.length > 1 ? html : t);
+  });
+  document.addEventListener("selectionchange", () => {
+    const sel = getSelection();
+    if (sel.rangeCount && ed.contains(sel.anchorNode)) { lastRange = sel.getRangeAt(0).cloneRange(); markTools(); }
+  });
 
   $("back").onclick = () => { clearTimeout(timer); collect(); if (cur.title || cur.body) saveDraft(cur); openHome(); };
   $("delDraft").onclick = () => {
@@ -283,36 +399,56 @@
     b.dataset.sure = ""; clearTimeout(timer); dropDraft(cur.id); openHome();
   };
 
-  function setPreview(on) {
-    $("ePrev").classList.toggle("hidden", !on); $("eBody").classList.toggle("hidden", on);
-    $("prevBtn").textContent = on ? "Back to writing" : "Preview";
-    if (on) $("ePrev").firstElementChild.innerHTML = render($("eBody").value, { resolve: s => localImgs[s] || s }) || '<p class="hint">Nothing written yet.</p>';
+  // ---------- toolbar ----------
+  function restore() {
+    ed.focus();
+    if (lastRange) { const s = getSelection(); s.removeAllRanges(); s.addRange(lastRange); }
   }
+  function topBlock() {
+    const sel = getSelection(); let n = sel.rangeCount ? sel.anchorNode : null;
+    if (!n || !ed.contains(n)) return null;
+    while (n && n.parentNode !== ed) n = n.parentNode;
+    return n;
+  }
+  function caretToEnd(el) {
+    const r = document.createRange(); r.selectNodeContents(el); r.collapse(false);
+    const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+  }
+  function setBlock(tag) {
+    let b = topBlock();
+    if (!b) return;
+    if (b.nodeType === 3) { const p = document.createElement("p"); ed.replaceChild(p, b); p.appendChild(b); b = p; }
+    if (b.tagName === "FIGURE" || b.tagName === "HR") return;
+    const target = b.tagName === tag ? "P" : tag;
+    const nb = document.createElement(target);
+    nb.innerHTML = b.innerHTML || "<br>";
+    ed.replaceChild(nb, b); caretToEnd(nb); autosave(); markTools();
+  }
+  function markTools() {
+    const b = topBlock();
+    const on = { b: document.queryCommandState("bold"), i: document.queryCommandState("italic"),
+      h: !!(b && b.tagName === "H2"), q: !!(b && b.tagName === "BLOCKQUOTE") };
+    document.querySelectorAll("#tools button").forEach(x => x.classList.toggle("on", !!on[x.dataset.a]));
+  }
+  $("tools").addEventListener("mousedown", e => { if (e.target.closest("button")) e.preventDefault(); });
   $("tools").onclick = e => {
-    const b = e.target.closest("button"); if (!b) return;
-    const a = b.dataset.a, ta = $("eBody");
-    if (a === "prev") return setPreview($("ePrev").classList.contains("hidden"));
+    const btn = e.target.closest("button"); if (!btn) return;
+    const a = btn.dataset.a;
     if (a === "photo") { $("photoIn").value = ""; return $("photoIn").click(); }
-    if (!$("ePrev").classList.contains("hidden")) setPreview(false);
-    const s = ta.selectionStart, en = ta.selectionEnd, v = ta.value, sel = v.slice(s, en);
-    let ins, caret;
-    if (a === "b" || a === "i") {
-      const m = a === "b" ? "**" : "*";
-      ins = m + (sel || (a === "b" ? "bold text" : "italic text")) + m;
-    } else if (a === "h") {
-      ins = (s > 0 && v[s - 1] !== "\n" ? "\n\n" : "") + "## " + (sel || "Heading") + "\n\n";
-    } else if (a === "q") {
-      ins = (s > 0 && v[s - 1] !== "\n" ? "\n\n" : "") + "> " + (sel || "A quote").replace(/\n/g, "\n> ") + "\n\n";
-    } else if (a === "hr") {
-      ins = "\n\n***\n\n";
+    restore();
+    if (a === "b") document.execCommand("bold");
+    else if (a === "i") document.execCommand("italic");
+    else if (a === "h") setBlock("H2");
+    else if (a === "q") setBlock("BLOCKQUOTE");
+    else if (a === "hr") {
+      const b = topBlock(), hr = document.createElement("hr"), p = document.createElement("p"); p.innerHTML = "<br>";
+      if (b) b.after(hr, p); else ed.append(hr, p);
+      caretToEnd(p);
     }
-    ta.value = v.slice(0, s) + ins + v.slice(en);
-    caret = s + ins.length;
-    ta.focus(); ta.setSelectionRange(caret, caret); autosave();
+    autosave(); markTools();
   };
 
   // ---------- photos ----------
-  const localImgs = {};   // photos added in this session, shown in Preview before the site updates
   function shrink(file) {
     return new Promise((resolve, reject) => {
       const url = URL.createObjectURL(file), img = new Image();
@@ -330,7 +466,7 @@
   }
   $("photoIn").addEventListener("change", async () => {
     const file = $("photoIn").files[0]; if (!file) return;
-    const ta = $("eBody"), s = ta.selectionStart, en = ta.selectionEnd;
+    const where = lastRange ? (function () { let n = lastRange.startContainer; while (n && n.parentNode !== ed) n = n.parentNode; return n; })() : null;
     msg($("editMsg"), "Uploading your photo…", true);
     try {
       let blob;
@@ -339,11 +475,15 @@
       const path = "images/" + Date.now().toString(36) + ".jpg";
       await putBytes(path, new Uint8Array(await blob.arrayBuffer()), "Add photo");
       localImgs[path] = URL.createObjectURL(blob);
-      const v = ta.value, before = v.slice(0, s);
-      const ins = (before && !before.endsWith("\n\n") ? (before.endsWith("\n") ? "\n" : "\n\n") : "") + "![](" + path + ")\n\n";
-      ta.value = before + ins + v.slice(en);
-      const caret = s + ins.length; ta.focus(); ta.setSelectionRange(caret, caret); autosave();
-      msg($("editMsg"), "Photo added ✓ To add a caption, type it between the [ ] brackets, e.g. ![My morning coffee](…). Tap Preview to see it.", true);
+      const fig = figureEl(path, "");
+      if (where && where.parentNode === ed) {
+        const empty = where.nodeType === 1 && where.tagName === "P" && !where.textContent.trim() && !where.querySelector("img");
+        if (empty) ed.replaceChild(fig, where); else where.after(fig);
+      } else ed.appendChild(fig);
+      let next = fig.nextElementSibling;
+      if (!next || next.tagName === "FIGURE" || next.tagName === "HR") { next = document.createElement("p"); next.innerHTML = "<br>"; fig.after(next); }
+      ed.focus(); caretToEnd(next); ensureEmpty(); autosave();
+      msg($("editMsg"), "Photo added ✓ You can type a caption under it.", true);
     } catch (e) { msg($("editMsg"), e.message || "The photo could not be uploaded. Please try again."); }
   });
 

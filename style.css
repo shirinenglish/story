@@ -159,3 +159,18 @@ body:not(.studio) > .wrap {
   box-shadow: 0 30px 70px -20px rgba(20, 5, 5, .75);
 }
 .body figure { clear: both; }
+
+/* ---------- the writing box (looks like the published page) ---------- */
+.editor { min-height: 55vh; padding: 22px 26px; outline: none; font-family: var(--serif); font-size: 19px; line-height: 1.8; overflow-wrap: anywhere; }
+.editor:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.editor.is-empty > p:first-child::before { content: attr(data-ph); color: var(--ink-soft); opacity: .7; pointer-events: none; }
+.editor.is-empty > p:first-child::before { content: "Start writing your story here…"; }
+.editor h2 { margin-top: 1em; }
+.toolbar button.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.toolbar { position: sticky; top: 0; z-index: 3; background: var(--bg); padding: 8px 0; }
+.ed-fig { margin: 1.4em 0; text-align: center; }
+.ed-fig img { display: block; max-width: 100%; max-height: 60vh; margin: 0 auto; border-radius: 6px; }
+.ed-cap { display: block; width: 100%; margin: 8px 0 4px; border: 0; border-bottom: 1px dashed var(--line); background: transparent; color: var(--ink-soft); font: italic 15px var(--serif); text-align: center; padding: 6px; outline: none; }
+.ed-cap:focus { border-bottom-color: var(--accent); }
+.ed-rm { border: 0; background: none; color: var(--ink-soft); font: 12px var(--sans); cursor: pointer; padding: 4px 8px; }
+.ed-rm:hover { color: #9b2a1c; }
