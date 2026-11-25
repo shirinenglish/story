@@ -8,7 +8,7 @@ window.SITE = {
   // Where your site lives on GitHub
   github: {
     owner: "shirinenglish",   // your GitHub username
-    repo: "stories",          // the name of the repository for this site
+    repo: "story",          // the name of the repository for this site
     branch: "main"
   }
 };
